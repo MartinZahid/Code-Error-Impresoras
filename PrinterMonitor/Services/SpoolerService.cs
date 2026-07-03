@@ -74,8 +74,10 @@ internal class SpoolerService : IDisposable
             if (ret == NativeMethods.WAIT_OBJECT_0)
             {
                 NativeMethods.FindNextPrinterChangeNotification(_hChange, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero);
-                NotifyState(printerName);
             }
+            // Refrescar siempre, incluso con timeout, para capturar cambios
+            // que el driver no notifica (papel, puerta, toner, etc.)
+            NotifyState(printerName);
         }
     }
 
@@ -172,30 +174,25 @@ internal class SpoolerService : IDisposable
 
         // 3. USB directo via IOCTL
         {
-            // Coleccion de rutas a probar
-            var usbPaths = new List<string>();
-
-            if (!string.IsNullOrEmpty(portName) && portName.StartsWith("USB", StringComparison.OrdinalIgnoreCase))
-                usbPaths.Add(@"\\.\" + portName);
-
-            // Respaldo: enumerar todas las interfaces USBPRINT via SetupAPI
-            usbPaths.AddRange(NativeMethods.EnumUsbPrinterPaths());
+            // Solo usar rutas de SetupAPI; el constructor manual \\.\USB001
+            // no es un device path real y genera ruido en los logs
+            var usbPaths = NativeMethods.EnumUsbPrinterPaths();
 
             bool usbFound = false;
-            foreach (string path in usbPaths.Distinct(StringComparer.OrdinalIgnoreCase))
+            foreach (string path in usbPaths)
             {
                 var (usbStatus, diag) = NativeMethods.ReadUsbPrinterStatus(path);
                 if (!usbStatus.HasValue)
                 {
                     if (diag != null)
-                        debugParts.Add($"USB[{path}]: {diag}");
+                        debugParts.Add($"USB: {diag}");
                     continue;
                 }
 
                 usbFound = true;
-                bool noError = (usbStatus.Value & 0x04) != 0;
                 bool paperEmpty = (usbStatus.Value & 0x01) != 0;
                 bool selected = (usbStatus.Value & 0x02) != 0;
+                bool noError = (usbStatus.Value & 0x04) != 0;
                 debugParts.Add($"USB: 0x{usbStatus.Value:X2} paper={(paperEmpty?1:0)} online={(selected?1:0)} ok={(noError?1:0)}");
 
                 if (!noError)
@@ -215,16 +212,21 @@ internal class SpoolerService : IDisposable
                 debugParts.Add("USB: sin-acceso");
         }
 
-        // 4. Event Log
+        // 4. Event Log — solo aplicar si la impresora ya reporta problemas
+        // desde otras fuentes, para evitar falsos positivos con eventos viejos
         string? evtLog = PrintEventQuerier.GetRecentError(printerName);
-        if (evtLog != null)
+        if (evtLog != null && !res.IsReady)
         {
             debugParts.Add(evtLog);
             res.Error = true;
             res.Intervencion = true;
         }
+        else if (evtLog != null)
+        {
+            debugParts.Add(evtLog + " (ignorado, estado actual OK)");
+        }
 
-        // 5. WMI
+        // 5. WMI — fuente mas confiable para estado de papel/puerta/toner
         var wmi = WmiService.Query(printerName);
         if (wmi.Count > 0)
         {
@@ -234,6 +236,26 @@ internal class SpoolerService : IDisposable
                 (wmi.GetValueOrDefault("PrinterStatus") as ushort?) == 7;
             if (wmiOffline) res.Offline = true;
 
+            // Win32_Printer.PrinterStatus indica el estado actual de la impresora
+            // (3=ready, 4=printing, 6=stopped, 7=offline, 8=jam, 9=paper out,
+            //  10=paper problem, 11=paused, 12=toner low, 13=no toner, etc.)
+            ushort? ps = wmi.GetValueOrDefault("PrinterStatus") as ushort?;
+            if (ps.HasValue && ps.Value > 3)
+            {
+                switch (ps.Value)
+                {
+                    case 6: res.Intervencion = true; break;
+                    case 8: res.Atasco = true; break;
+                    case 9: res.SinPapel = true; break;
+                    case 10: res.ProblemaPapel = true; break;
+                    case 11: res.Pausada = true; break;
+                    case 12: res.TonerBajo = true; break;
+                    case 13: res.SinToner = true; break;
+                }
+            }
+
+            // DetectedErrorState (2=atasco, 3=sin papel, 7=toner bajo,
+            // 8=sin toner, 9=puerta abierta, 10=intervencion)
             int? err = wmi.GetValueOrDefault("DetectedErrorState") as int? ??
                        (wmi.GetValueOrDefault("DetectedErrorState") as ushort?);
             if (err == 2) res.Atasco = true;
@@ -243,6 +265,7 @@ internal class SpoolerService : IDisposable
             else if (err == 9) res.PuertaAbierta = true;
             else if (err == 10) res.Intervencion = true;
 
+            // ExtendedPrinterStatus (17=intervencion, 18=atasco, 19=sin papel)
             int? ext = wmi.GetValueOrDefault("ExtendedPrinterStatus") as int? ??
                        (wmi.GetValueOrDefault("ExtendedPrinterStatus") as ushort?);
             if (ext == 17) res.Intervencion = true;
