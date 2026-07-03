@@ -16,6 +16,7 @@ internal static class WmiService
             string[] queries = [
                 $"SELECT * FROM Win32_Printer WHERE Name = '{printerName.Replace("'", "''")}'",
                 $"SELECT * FROM Win32_Printer WHERE Name = \"{printerName.Replace("\"", "\"\"")}\"",
+                $"SELECT * FROM Win32_Printer WHERE DeviceID = '{printerName.Replace("'", "''")}'",
             ];
 
             foreach (var q in queries)
@@ -23,16 +24,12 @@ internal static class WmiService
                 using var searcher = new ManagementObjectSearcher(scope, new ObjectQuery(q));
                 foreach (ManagementObject p in searcher.Get())
                 {
-                    result["PrinterStatus"] = p["PrinterStatus"];
-                    result["PrinterState"] = p["PrinterState"];
-                    result["WorkOffline"] = p["WorkOffline"];
-                    result["DetectedErrorState"] = p["DetectedErrorState"];
-                    result["ExtendedPrinterStatus"] = p["ExtendedPrinterStatus"];
+                    FillResult(p, result);
                     return result;
                 }
             }
 
-            // Fallback: busqueda parcial
+            // Fallback: busqueda parcial por nombre
             using var allSearch = new ManagementObjectSearcher(scope,
                 new ObjectQuery("SELECT * FROM Win32_Printer"));
             foreach (ManagementObject p in allSearch.Get())
@@ -43,18 +40,46 @@ internal static class WmiService
                 if (wmiName.IndexOf(printerName, StringComparison.OrdinalIgnoreCase) >= 0 ||
                     printerName.IndexOf(wmiName, StringComparison.OrdinalIgnoreCase) >= 0)
                 {
-                    result["PrinterStatus"] = p["PrinterStatus"];
-                    result["PrinterState"] = p["PrinterState"];
-                    result["WorkOffline"] = p["WorkOffline"];
-                    result["DetectedErrorState"] = p["DetectedErrorState"];
-                    result["ExtendedPrinterStatus"] = p["ExtendedPrinterStatus"];
-                    result["_matched_by"] = wmiName;
+                    FillResult(p, result, wmiName);
+                    return result;
+                }
+
+                // Tambien buscar por DeviceID
+                string? wmiDeviceId = p["DeviceID"]?.ToString();
+                if (!string.IsNullOrEmpty(wmiDeviceId) &&
+                    (wmiDeviceId.IndexOf(printerName, StringComparison.OrdinalIgnoreCase) >= 0 ||
+                     printerName.IndexOf(wmiDeviceId, StringComparison.OrdinalIgnoreCase) >= 0))
+                {
+                    FillResult(p, result, wmiDeviceId);
                     return result;
                 }
             }
+
+            // Fallback final: acceso directo via path WMI
+            try
+            {
+                string escaped = printerName.Replace("'", "''");
+                var mo = new ManagementObject(scope,
+                    new ManagementPath($"Win32_Printer.DeviceID='{escaped}'"),
+                    new ObjectGetOptions());
+                mo.Get();
+                FillResult(mo, result);
+            }
+            catch { }
         }
         catch { }
 
         return result;
+    }
+
+    private static void FillResult(ManagementBaseObject p, Dictionary<string, object?> result, string? matchedBy = null)
+    {
+        result["PrinterStatus"] = p["PrinterStatus"];
+        result["PrinterState"] = p["PrinterState"];
+        result["WorkOffline"] = p["WorkOffline"];
+        result["DetectedErrorState"] = p["DetectedErrorState"];
+        result["ExtendedPrinterStatus"] = p["ExtendedPrinterStatus"];
+        if (matchedBy != null)
+            result["_matched_by"] = matchedBy;
     }
 }

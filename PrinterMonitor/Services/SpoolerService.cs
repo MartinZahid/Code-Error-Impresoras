@@ -94,6 +94,36 @@ internal class SpoolerService : IDisposable
         }
     }
 
+    private static ushort? ToUshort(object? val)
+    {
+        if (val is ushort u) return u;
+        if (val is short s) return (ushort)s;
+        if (val is int i) return (ushort)i;
+        if (val is uint ui) return (ushort)ui;
+        if (val is byte b) return b;
+        if (val is string str && ushort.TryParse(str, out var p)) return p;
+        return null;
+    }
+
+    private static int? ToInt(object? val)
+    {
+        if (val is int i) return i;
+        if (val is short s) return s;
+        if (val is ushort u) return u;
+        if (val is uint ui) return (int)ui;
+        if (val is string str && int.TryParse(str, out var p)) return p;
+        return null;
+    }
+
+    private static bool ToBool(object? val)
+    {
+        if (val is bool b) return b;
+        if (val is string s) return s.Equals("true", StringComparison.OrdinalIgnoreCase) || s == "1";
+        if (val is int i) return i != 0;
+        if (val is uint ui) return ui != 0;
+        return false;
+    }
+
     private static PrinterState ReadState(string printerName)
     {
         var res = new PrinterState();
@@ -112,6 +142,19 @@ internal class SpoolerService : IDisposable
             portName = details.PortName;
 
             res.RawMask = mask;
+
+            // Releer PRINTER_INFO_2 despues de un pequeno delay por si el driver
+            // no actualiza los flags en la primera lectura
+            Thread.Sleep(50);
+            var details2 = NativeMethods.GetPrinterDetails(h);
+            uint mask2 = details2.Status;
+            if (mask2 != mask)
+            {
+                mask = mask2;
+                res.RawMask = mask;
+                debugParts.Add("mask-refresh");
+            }
+
             res.Offline       = (mask & NativeMethods.PRINTER_STATUS_OFFLINE) != 0;
             res.SinPapel      = (mask & NativeMethods.PRINTER_STATUS_PAPER_OUT) != 0;
             res.Atasco        = (mask & NativeMethods.PRINTER_STATUS_PAPER_JAM) != 0;
@@ -227,22 +270,26 @@ internal class SpoolerService : IDisposable
         }
 
         // 5. WMI — fuente mas confiable para estado de papel/puerta/toner
+        // Usa conversion robusta de tipos (WMI puede devolver ushort, int, short, etc.)
         var wmi = WmiService.Query(printerName);
         if (wmi.Count > 0)
         {
-            bool wmiOffline =
-                (wmi.GetValueOrDefault("WorkOffline") as bool?) == true ||
-                (wmi.GetValueOrDefault("PrinterState") as ushort?) == 8 ||
-                (wmi.GetValueOrDefault("PrinterStatus") as ushort?) == 7;
-            if (wmiOffline) res.Offline = true;
+            bool wmiWorkOffline = ToBool(wmi.GetValueOrDefault("WorkOffline"));
+            ushort? wmiState = ToUshort(wmi.GetValueOrDefault("PrinterState"));
+            ushort? wmiStatus = ToUshort(wmi.GetValueOrDefault("PrinterStatus"));
+            int? wmiErr = ToInt(wmi.GetValueOrDefault("DetectedErrorState"));
+            int? wmiExt = ToInt(wmi.GetValueOrDefault("ExtendedPrinterStatus"));
 
-            // Win32_Printer.PrinterStatus indica el estado actual de la impresora
-            // (3=ready, 4=printing, 6=stopped, 7=offline, 8=jam, 9=paper out,
-            //  10=paper problem, 11=paused, 12=toner low, 13=no toner, etc.)
-            ushort? ps = wmi.GetValueOrDefault("PrinterStatus") as ushort?;
-            if (ps.HasValue && ps.Value > 3)
+            // Offline
+            if (wmiWorkOffline || wmiState == 8 || wmiStatus == 7)
+                res.Offline = true;
+
+            // PrinterStatus: 3=ready, 4=printing, 6=stopped, 7=offline,
+            // 8=jam, 9=paper out, 10=paper problem, 11=paused,
+            // 12=toner low, 13=no toner, etc.
+            if (wmiStatus.HasValue && wmiStatus > 3)
             {
-                switch (ps.Value)
+                switch (wmiStatus.Value)
                 {
                     case 6: res.Intervencion = true; break;
                     case 8: res.Atasco = true; break;
@@ -254,34 +301,42 @@ internal class SpoolerService : IDisposable
                 }
             }
 
-            // DetectedErrorState (2=atasco, 3=sin papel, 7=toner bajo,
-            // 8=sin toner, 9=puerta abierta, 10=intervencion)
-            int? err = wmi.GetValueOrDefault("DetectedErrorState") as int? ??
-                       (wmi.GetValueOrDefault("DetectedErrorState") as ushort?);
-            if (err == 2) res.Atasco = true;
-            else if (err == 3) res.SinPapel = true;
-            else if (err == 7) res.TonerBajo = true;
-            else if (err == 8) res.SinToner = true;
-            else if (err == 9) res.PuertaAbierta = true;
-            else if (err == 10) res.Intervencion = true;
+            // DetectedErrorState: 2=jam, 3=paper out, 7=toner low,
+            // 8=no toner, 9=door open, 10=intervention
+            if (wmiErr == 2) res.Atasco = true;
+            else if (wmiErr == 3) res.SinPapel = true;
+            else if (wmiErr == 7) res.TonerBajo = true;
+            else if (wmiErr == 8) res.SinToner = true;
+            else if (wmiErr == 9) res.PuertaAbierta = true;
+            else if (wmiErr == 10) res.Intervencion = true;
 
-            // ExtendedPrinterStatus (17=intervencion, 18=atasco, 19=sin papel)
-            int? ext = wmi.GetValueOrDefault("ExtendedPrinterStatus") as int? ??
-                       (wmi.GetValueOrDefault("ExtendedPrinterStatus") as ushort?);
-            if (ext == 17) res.Intervencion = true;
-            else if (ext == 18) res.Atasco = true;
-            else if (ext == 19) res.SinPapel = true;
+            // ExtendedPrinterStatus: 17=intervention, 18=jam, 19=paper out
+            if (wmiExt == 17) res.Intervencion = true;
+            else if (wmiExt == 18) res.Atasco = true;
+            else if (wmiExt == 19) res.SinPapel = true;
+
+            // Si WMI dice que esta lista (PrinterStatus=3) y no hay flags activos,
+            // resetear cualquier flag fantasma que otras fuentes hayan puesto
+            if (wmiStatus == 3 && res.IsReady)
+            {
+                res.Error = false;
+                res.Intervencion = false;
+            }
 
             string wmiName = wmi.GetValueOrDefault("_matched_by") as string ?? "";
             string extra = !string.IsNullOrEmpty(wmiName) ? $" [{wmiName}]" : "";
-            res.WmiInfo = $"WMI: S={wmi.GetValueOrDefault("PrinterStatus")} " +
-                           $"St={wmi.GetValueOrDefault("PrinterState")} " +
-                           $"Err={wmi.GetValueOrDefault("DetectedErrorState")}{extra}";
+            res.WmiInfo = $"WMI: S={wmiStatus} St={wmiState} Err={wmiErr}{extra}";
         }
         else
         {
             res.WmiInfo = "WMI: no encontrada";
         }
+
+        // 6. PrintQueue (System.Printing) — estado detallado del spooler
+        // Funciona con impresoras WSD/red que los metodos anteriores no cubren
+        string? pqInfo = PrintSystemService.ApplyStatus(printerName, res);
+        if (pqInfo != null)
+            debugParts.Add(pqInfo);
 
         // Error generico sin detalle -> intervencion
         if (res.Error && !res.SinPapel && !res.Atasco && !res.PuertaAbierta &&
