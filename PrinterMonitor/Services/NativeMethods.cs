@@ -133,6 +133,9 @@ internal static class NativeMethods
     [DllImport("winspool.drv", CharSet = CharSet.Unicode, SetLastError = true)]
     public static extern bool FindNextPrinterChangeNotification(IntPtr hChange, IntPtr pdwChange, IntPtr pPrinterNotifyOptions, IntPtr ppPrinterNotifyInfo);
 
+    [DllImport("winspool.drv", SetLastError = true)]
+    public static extern bool FindClosePrinterChangeNotification(IntPtr hChange);
+
     [DllImport("kernel32.dll", SetLastError = true)]
     public static extern int WaitForSingleObject(IntPtr hHandle, uint dwMilliseconds);
 

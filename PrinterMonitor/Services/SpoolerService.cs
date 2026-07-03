@@ -56,7 +56,7 @@ internal class SpoolerService : IDisposable
 
         if (_hChange != IntPtr.Zero)
         {
-            NativeMethods.CloseHandle(_hChange);
+            NativeMethods.FindClosePrinterChangeNotification(_hChange);
             _hChange = IntPtr.Zero;
         }
         if (_hPrinter != IntPtr.Zero)
