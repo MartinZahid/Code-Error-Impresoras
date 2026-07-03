@@ -1,0 +1,162 @@
+﻿<Window x:Class="PrinterMonitor.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:conv="clr-namespace:PrinterMonitor.Converters"
+        Title="Monitor de Impresora" Width="700" Height="600" ResizeMode="CanMinimize"
+        WindowStartupLocation="CenterScreen"
+        FontFamily="Segoe UI" FontSize="11"
+        Background="#F5F7FA">
+    <Window.Resources>
+        <conv:BoolToColorConverter x:Key="BoolToColor"/>
+        <conv:BoolToDotConverter x:Key="BoolToDot"/>
+        <conv:BoolToVisibilityConverter x:Key="BoolToVis"/>
+    </Window.Resources>
+
+    <DockPanel>
+        <!-- HEADER -->
+        <Border DockPanel.Dock="Top" Height="100" Background="#0984E3">
+            <Grid>
+                <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
+                    <TextBlock Text="Monitor de Impresora"
+                               FontSize="18" FontWeight="Bold"
+                               Foreground="White" HorizontalAlignment="Center"/>
+                    <TextBlock x:Name="LblSub" Text="Listo para monitorear"
+                               FontSize="10" Foreground="#DFE6E9"
+                               HorizontalAlignment="Center"/>
+                </StackPanel>
+                <TextBlock x:Name="LblVersion" Text="v0.0.0"
+                           FontSize="9" Foreground="#81ECEC"
+                           VerticalAlignment="Top" HorizontalAlignment="Right"
+                           Margin="0,6,10,0"/>
+            </Grid>
+        </Border>
+
+        <StackPanel Margin="20,15,20,0">
+            <!-- SELECTOR -->
+            <Border Background="White" BorderBrush="#DFE6E9" BorderThickness="1"
+                    Padding="10" Margin="0,0,0,15">
+                <DockPanel>
+                    <TextBlock Text="Impresora" FontSize="10" Foreground="#B2BEC3"
+                               DockPanel.Dock="Top" Margin="0,0,0,5"/>
+                    <ComboBox x:Name="CboPrinters" Width="350" FontSize="11"
+                              DockPanel.Dock="Left"/>
+                    <Button x:Name="BtnIniciar" Content="Iniciar"
+                            Width="80" Height="26"
+                            Background="#0984E3" Foreground="White"
+                            BorderThickness="0" Cursor="Hand"
+                            Click="BtnIniciar_Click" DockPanel.Dock="Left" Margin="8,0,0,0"/>
+                    <Button x:Name="BtnSimular" Content="Simular"
+                            Width="80" Height="26"
+                            Background="#6C5CE7" Foreground="White"
+                            BorderThickness="0" Cursor="Hand"
+                            Click="BtnSimular_Click" DockPanel.Dock="Right"/>
+                </DockPanel>
+            </Border>
+
+            <!-- TARJETA DE ESTADO -->
+            <Border Background="White" BorderBrush="#DFE6E9" BorderThickness="1"
+                    Padding="20" Margin="0,0,0,15">
+                <StackPanel>
+                    <DockPanel>
+                        <TextBlock x:Name="IconoGrande" Text="&#x2611;"
+                                   FontSize="40" DockPanel.Dock="Left" Margin="0,0,20,0"/>
+                        <StackPanel>
+                            <TextBlock x:Name="LblEstado"
+                                       Text="Selecciona una impresora y presiona Iniciar"
+                                       FontSize="16" FontWeight="Bold"
+                                       Foreground="#B2BEC3"/>
+                            <TextBlock x:Name="LblTimestamp" FontSize="10"
+                                       Foreground="#B2BEC3" Margin="0,2,0,0"/>
+                        </StackPanel>
+                    </DockPanel>
+                    <DockPanel Margin="0,10,0,0">
+                        <TextBlock x:Name="LblConexion" FontSize="10" Foreground="#B2BEC3"
+                                   DockPanel.Dock="Left"/>
+                        <TextBlock x:Name="LblHist" FontSize="10" Foreground="#B2BEC3"
+                                   DockPanel.Dock="Right"/>
+                    </DockPanel>
+                    <TextBlock x:Name="LblDebug" FontSize="8" Foreground="#B2BEC3"
+                               Margin="0,5,0,0"/>
+                </StackPanel>
+            </Border>
+
+            <!-- DETALLES -->
+            <Border Background="White" BorderBrush="#DFE6E9" BorderThickness="1"
+                    Padding="15" Margin="0,0,0,0">
+                <StackPanel>
+                    <TextBlock Text="Detalles de estado" FontSize="11" FontWeight="Bold"
+                               Margin="0,0,0,8"/>
+                    <WrapPanel>
+                        <WrapPanel.Resources>
+                            <Style TargetType="StackPanel" x:Key="DetalleItem">
+                                <Setter Property="Margin" Value="0,0,20,4"/>
+                                <Setter Property="Orientation" Value="Horizontal"/>
+                            </Style>
+                        </WrapPanel.Resources>
+
+                        <StackPanel Style="{StaticResource DetalleItem}">
+                            <TextBlock x:Name="DotOffline" Text="&#x25CB;" FontSize="10"
+                                       Foreground="#B2BEC3"/>
+                            <TextBlock Text=" Fuera de linea" FontSize="10" Foreground="#B2BEC3"/>
+                        </StackPanel>
+                        <StackPanel Style="{StaticResource DetalleItem}">
+                            <TextBlock x:Name="DotError" Text="&#x25CB;" FontSize="10"
+                                       Foreground="#B2BEC3"/>
+                            <TextBlock Text=" Error general" FontSize="10" Foreground="#B2BEC3"/>
+                        </StackPanel>
+                        <StackPanel Style="{StaticResource DetalleItem}">
+                            <TextBlock x:Name="DotSinPapel" Text="&#x25CB;" FontSize="10"
+                                       Foreground="#B2BEC3"/>
+                            <TextBlock Text=" Falta de papel" FontSize="10" Foreground="#B2BEC3"/>
+                        </StackPanel>
+                        <StackPanel Style="{StaticResource DetalleItem}">
+                            <TextBlock x:Name="DotAtasco" Text="&#x25CB;" FontSize="10"
+                                       Foreground="#B2BEC3"/>
+                            <TextBlock Text=" Atasco de papel" FontSize="10" Foreground="#B2BEC3"/>
+                        </StackPanel>
+                        <StackPanel Style="{StaticResource DetalleItem}">
+                            <TextBlock x:Name="DotProblemaPapel" Text="&#x25CB;" FontSize="10"
+                                       Foreground="#B2BEC3"/>
+                            <TextBlock Text=" Problema de papel" FontSize="10" Foreground="#B2BEC3"/>
+                        </StackPanel>
+                        <StackPanel Style="{StaticResource DetalleItem}">
+                            <TextBlock x:Name="DotSinToner" Text="&#x25CB;" FontSize="10"
+                                       Foreground="#B2BEC3"/>
+                            <TextBlock Text=" Sin toner" FontSize="10" Foreground="#B2BEC3"/>
+                        </StackPanel>
+                        <StackPanel Style="{StaticResource DetalleItem}">
+                            <TextBlock x:Name="DotTonerBajo" Text="&#x25CB;" FontSize="10"
+                                       Foreground="#B2BEC3"/>
+                            <TextBlock Text=" Toner bajo" FontSize="10" Foreground="#B2BEC3"/>
+                        </StackPanel>
+                        <StackPanel Style="{StaticResource DetalleItem}">
+                            <TextBlock x:Name="DotPuertaAbierta" Text="&#x25CB;" FontSize="10"
+                                       Foreground="#B2BEC3"/>
+                            <TextBlock Text=" Puerta abierta" FontSize="10" Foreground="#B2BEC3"/>
+                        </StackPanel>
+                        <StackPanel Style="{StaticResource DetalleItem}">
+                            <TextBlock x:Name="DotPausada" Text="&#x25CB;" FontSize="10"
+                                       Foreground="#B2BEC3"/>
+                            <TextBlock Text=" En pausa" FontSize="10" Foreground="#B2BEC3"/>
+                        </StackPanel>
+                        <StackPanel Style="{StaticResource DetalleItem}">
+                            <TextBlock x:Name="DotOcupada" Text="&#x25CB;" FontSize="10"
+                                       Foreground="#B2BEC3"/>
+                            <TextBlock Text=" Ocupada" FontSize="10" Foreground="#B2BEC3"/>
+                        </StackPanel>
+                        <StackPanel Style="{StaticResource DetalleItem}">
+                            <TextBlock x:Name="DotImprimiendo" Text="&#x25CB;" FontSize="10"
+                                       Foreground="#B2BEC3"/>
+                            <TextBlock Text=" Imprimiendo" FontSize="10" Foreground="#B2BEC3"/>
+                        </StackPanel>
+                        <StackPanel Style="{StaticResource DetalleItem}">
+                            <TextBlock x:Name="DotIntervencion" Text="&#x25CB;" FontSize="10"
+                                       Foreground="#B2BEC3"/>
+                            <TextBlock Text=" Requiere intervencion" FontSize="10" Foreground="#B2BEC3"/>
+                        </StackPanel>
+                    </WrapPanel>
+                </StackPanel>
+            </Border>
+        </StackPanel>
+    </DockPanel>
+</Window>
