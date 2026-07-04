@@ -338,6 +338,20 @@ internal class SpoolerService : IDisposable
         if (pqInfo != null)
             debugParts.Add(pqInfo);
 
+        // 7. Web (HTTP) — consulta directa al panel web de la impresora
+        // Especialmente util para impresoras Brother que tienen web interface
+        try
+        {
+            string? webInfo = WebStatusService.ApplyStatus(res, portName)
+                .GetAwaiter().GetResult();
+            if (webInfo != null)
+                debugParts.Add(webInfo);
+        }
+        catch (Exception ex)
+        {
+            debugParts.Add($"Web: error={ex.Message}");
+        }
+
         // Error generico sin detalle -> intervencion
         if (res.Error && !res.SinPapel && !res.Atasco && !res.PuertaAbierta &&
             !res.SinToner && !res.TonerBajo && !res.ProblemaPapel && !res.Intervencion)
