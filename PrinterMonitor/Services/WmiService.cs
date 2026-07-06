@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Management;
 
 namespace PrinterMonitor.Services;
@@ -13,49 +14,7 @@ internal static class WmiService
             var scope = new ManagementScope(@"\\.\root\cimv2");
             scope.Connect();
 
-            string[] queries = [
-                $"SELECT * FROM Win32_Printer WHERE Name = '{printerName.Replace("'", "''")}'",
-                $"SELECT * FROM Win32_Printer WHERE Name = \"{printerName.Replace("\"", "\"\"")}\"",
-                $"SELECT * FROM Win32_Printer WHERE DeviceID = '{printerName.Replace("'", "''")}'",
-            ];
-
-            foreach (var q in queries)
-            {
-                using var searcher = new ManagementObjectSearcher(scope, new ObjectQuery(q));
-                foreach (ManagementObject p in searcher.Get())
-                {
-                    FillResult(p, result);
-                    return result;
-                }
-            }
-
-            // Fallback: busqueda parcial por nombre
-            using var allSearch = new ManagementObjectSearcher(scope,
-                new ObjectQuery("SELECT * FROM Win32_Printer"));
-            foreach (ManagementObject p in allSearch.Get())
-            {
-                string? wmiName = p["Name"]?.ToString();
-                if (string.IsNullOrEmpty(wmiName)) continue;
-
-                if (wmiName.IndexOf(printerName, StringComparison.OrdinalIgnoreCase) >= 0 ||
-                    printerName.IndexOf(wmiName, StringComparison.OrdinalIgnoreCase) >= 0)
-                {
-                    FillResult(p, result, wmiName);
-                    return result;
-                }
-
-                // Tambien buscar por DeviceID
-                string? wmiDeviceId = p["DeviceID"]?.ToString();
-                if (!string.IsNullOrEmpty(wmiDeviceId) &&
-                    (wmiDeviceId.IndexOf(printerName, StringComparison.OrdinalIgnoreCase) >= 0 ||
-                     printerName.IndexOf(wmiDeviceId, StringComparison.OrdinalIgnoreCase) >= 0))
-                {
-                    FillResult(p, result, wmiDeviceId);
-                    return result;
-                }
-            }
-
-            // Fallback final: acceso directo via path WMI
+            // 1. Acceso directo por path WMI (mas seguro, sin inyeccion)
             try
             {
                 string escaped = printerName.Replace("'", "''");
@@ -64,10 +23,79 @@ internal static class WmiService
                     new ObjectGetOptions());
                 mo.Get();
                 FillResult(mo, result);
+                if (result.Count > 0)
+                    return result;
             }
-            catch { }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"WMI path access failed: {ex.Message}");
+            }
+
+            // 2. WQL exacto (escapando caracteres especiales)
+            string sanitized = printerName
+                .Replace("'", "''")
+                .Replace("\\", "\\\\")
+                .Replace("%", "[%]")
+                .Replace("_", "[_]");
+
+            string[] queries = [
+                $"SELECT * FROM Win32_Printer WHERE Name = '{sanitized}'",
+                $"SELECT * FROM Win32_Printer WHERE DeviceID = '{sanitized}'",
+            ];
+
+            foreach (var q in queries)
+            {
+                try
+                {
+                    using var searcher = new ManagementObjectSearcher(scope, new ObjectQuery(q));
+                    foreach (ManagementObject p in searcher.Get())
+                    {
+                        FillResult(p, result);
+                        return result;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Debug.WriteLine($"WMI query failed: {ex.Message}");
+                }
+            }
+
+            // 3. Fallback: busqueda parcial por nombre
+            try
+            {
+                using var allSearch = new ManagementObjectSearcher(scope,
+                    new ObjectQuery("SELECT * FROM Win32_Printer"));
+                foreach (ManagementObject p in allSearch.Get())
+                {
+                    string? wmiName = p["Name"]?.ToString();
+                    if (string.IsNullOrEmpty(wmiName)) continue;
+
+                    if (wmiName.IndexOf(printerName, StringComparison.OrdinalIgnoreCase) >= 0 ||
+                        printerName.IndexOf(wmiName, StringComparison.OrdinalIgnoreCase) >= 0)
+                    {
+                        FillResult(p, result, wmiName);
+                        return result;
+                    }
+
+                    string? wmiDeviceId = p["DeviceID"]?.ToString();
+                    if (!string.IsNullOrEmpty(wmiDeviceId) &&
+                        (wmiDeviceId.IndexOf(printerName, StringComparison.OrdinalIgnoreCase) >= 0 ||
+                         printerName.IndexOf(wmiDeviceId, StringComparison.OrdinalIgnoreCase) >= 0))
+                    {
+                        FillResult(p, result, wmiDeviceId);
+                        return result;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"WMI fallback search failed: {ex.Message}");
+            }
         }
-        catch { }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"WMI scope connection failed: {ex.Message}");
+        }
 
         return result;
     }

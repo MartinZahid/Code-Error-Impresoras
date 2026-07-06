@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Diagnostics.Eventing.Reader;
 
 namespace PrinterMonitor.Services;
@@ -40,8 +41,9 @@ internal static class PrintEventQuerier
                 }
             }
         }
-        catch
+        catch (Exception ex)
         {
+            Debug.WriteLine($"PrintEventQuerier error: {ex.Message}");
         }
         return null;
     }

@@ -19,28 +19,41 @@ internal class SpoolerService : IDisposable
         Stop();
         _running = true;
 
-        int ret = NativeMethods.OpenPrinter(printerName, out _hPrinter, IntPtr.Zero);
-        if (ret == 0 || _hPrinter == IntPtr.Zero)
-        {
-            _running = false;
-            return;
-        }
+        _thread = new Thread(() => {
+            try
+            {
+                int ret = NativeMethods.OpenPrinter(printerName, out _hPrinter, IntPtr.Zero);
+                if (ret == 0 || _hPrinter == IntPtr.Zero)
+                {
+                    // Reportar error via UI
+                    NotifyError(printerName, $"No se pudo abrir la impresora: error={ret}");
+                    _running = false;
+                    return;
+                }
 
-        _hChange = NativeMethods.FindFirstPrinterChangeNotification(
-            _hPrinter, NativeMethods.PRINTER_CHANGE_SET_PRINTER, 0, IntPtr.Zero);
+                _hChange = NativeMethods.FindFirstPrinterChangeNotification(
+                    _hPrinter, NativeMethods.PRINTER_CHANGE_SET_PRINTER, 0, IntPtr.Zero);
 
-        if (_hChange == IntPtr.Zero || _hChange == new IntPtr(-1))
-        {
-            NativeMethods.ClosePrinter(_hPrinter);
-            _hPrinter = IntPtr.Zero;
-            _running = false;
-            return;
-        }
+                if (_hChange == IntPtr.Zero || _hChange == new IntPtr(-1))
+                {
+                    int err = System.Runtime.InteropServices.Marshal.GetLastWin32Error();
+                    NativeMethods.ClosePrinter(_hPrinter);
+                    _hPrinter = IntPtr.Zero;
+                    NotifyError(printerName, $"FindFirstPrinterChangeNotification fallo: error={err}");
+                    _running = false;
+                    return;
+                }
 
-        // Estado inicial
-        NotifyState(printerName);
-
-        _thread = new Thread(() => PollingLoop(printerName))
+                // Estado inicial
+                NotifyState(printerName);
+                PollingLoop(printerName);
+            }
+            catch (Exception ex)
+            {
+                NotifyError(printerName, ex.Message);
+                _running = false;
+            }
+        })
         {
             IsBackground = true,
             Name = "PrinterMonitor"
@@ -51,14 +64,17 @@ internal class SpoolerService : IDisposable
     public void Stop()
     {
         _running = false;
-        _thread?.Join(2000);
-        _thread = null;
 
+        // Cerrar notificaciones primero para que WaitForSingleObject retorne inmediatamente
         if (_hChange != IntPtr.Zero)
         {
             NativeMethods.FindClosePrinterChangeNotification(_hChange);
             _hChange = IntPtr.Zero;
         }
+
+        _thread?.Join(2000);
+        _thread = null;
+
         if (_hPrinter != IntPtr.Zero)
         {
             NativeMethods.ClosePrinter(_hPrinter);
@@ -92,6 +108,19 @@ internal class SpoolerService : IDisposable
         {
             Debug.WriteLine($"Error reading state: {ex.Message}");
         }
+    }
+
+    private void NotifyError(string printerName, string error)
+    {
+        var state = new PrinterState
+        {
+            Offline = true,
+            Error = true,
+            Conectada = false
+        };
+        state.JobDebug = $"Error: {error}";
+        state.Timestamp = DateTime.Now.ToString("HH:mm:ss");
+        StateChanged?.Invoke(state);
     }
 
     private static ushort? ToUshort(object? val)
@@ -143,16 +172,19 @@ internal class SpoolerService : IDisposable
 
             res.RawMask = mask;
 
-            // Releer PRINTER_INFO_2 despues de un pequeno delay por si el driver
+            // Releer PRINTER_INFO_2 solo si hay flags activos, por si el driver
             // no actualiza los flags en la primera lectura
-            Thread.Sleep(50);
-            var details2 = NativeMethods.GetPrinterDetails(h);
-            uint mask2 = details2.Status;
-            if (mask2 != mask)
+            if (mask != 0 || cJobs > 0)
             {
-                mask = mask2;
-                res.RawMask = mask;
-                debugParts.Add("mask-refresh");
+                Thread.Sleep(50);
+                var details2 = NativeMethods.GetPrinterDetails(h);
+                uint mask2 = details2.Status;
+                if (mask2 != mask)
+                {
+                    mask = mask2;
+                    res.RawMask = mask;
+                    debugParts.Add("mask-refresh");
+                }
             }
 
             res.Offline       = (mask & NativeMethods.PRINTER_STATUS_OFFLINE) != 0;
@@ -217,9 +249,26 @@ internal class SpoolerService : IDisposable
 
         // 3. USB directo via IOCTL
         {
-            // Solo usar rutas de SetupAPI; el constructor manual \\.\USB001
-            // no es un device path real y genera ruido en los logs
-            var usbPaths = NativeMethods.EnumUsbPrinterPaths();
+            var usbPaths = new List<string>();
+
+            // (a) Desde el portName tipo USB001, USB002, etc.
+            if (!string.IsNullOrEmpty(portName) &&
+                portName.StartsWith("USB", StringComparison.OrdinalIgnoreCase))
+            {
+                usbPaths.Add(@"\\.\" + portName);
+                // Tambin variante USBP<N> en caso de que exista
+                if (portName.Length > 3 && int.TryParse(portName.AsSpan(3), out int portNum))
+                {
+                    usbPaths.Add($@"\\.\USBP{portNum:D3}");
+                    usbPaths.Add($@"\\.\USBPRINT{portNum:D2}");
+                }
+            }
+
+            // (b) Desde SetupAPI (GUID_DEVINTERFACE_USBPRINT) — slo detecta presentes
+            usbPaths.AddRange(NativeMethods.EnumUsbPrinterPaths());
+
+            // Quitar duplicados conservando orden
+            usbPaths = usbPaths.Distinct().ToList();
 
             bool usbFound = false;
             foreach (string path in usbPaths)
@@ -228,7 +277,7 @@ internal class SpoolerService : IDisposable
                 if (!usbStatus.HasValue)
                 {
                     if (diag != null)
-                        debugParts.Add($"USB: {diag}");
+                        debugParts.Add($"USB: {diag} ({path})");
                     continue;
                 }
 
@@ -253,6 +302,8 @@ internal class SpoolerService : IDisposable
             }
             if (!usbFound && usbPaths.Count > 0)
                 debugParts.Add("USB: sin-acceso");
+            else if (!usbFound)
+                debugParts.Add("USB: no-device");
         }
 
         // 4. Event Log — solo aplicar si la impresora ya reporta problemas
@@ -337,20 +388,6 @@ internal class SpoolerService : IDisposable
         string? pqInfo = PrintSystemService.ApplyStatus(printerName, res);
         if (pqInfo != null)
             debugParts.Add(pqInfo);
-
-        // 7. Web (HTTP) — consulta directa al panel web de la impresora
-        // Especialmente util para impresoras Brother que tienen web interface
-        try
-        {
-            string? webInfo = WebStatusService.ApplyStatus(res, portName)
-                .GetAwaiter().GetResult();
-            if (webInfo != null)
-                debugParts.Add(webInfo);
-        }
-        catch (Exception ex)
-        {
-            debugParts.Add($"Web: error={ex.Message}");
-        }
 
         // Error generico sin detalle -> intervencion
         if (res.Error && !res.SinPapel && !res.Atasco && !res.PuertaAbierta &&

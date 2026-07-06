@@ -279,6 +279,9 @@ internal static class NativeMethods
         }
     }
 
+    public const int JOB_CONTROL_CANCEL = 3;
+    public const int JOB_CONTROL_DELETE = 5;
+
     public static bool SubmitTestJob(IntPtr hPrinter)
     {
         try
@@ -298,8 +301,10 @@ internal static class NativeMethods
                 int jobId = StartDocPrinter(hPrinter, 1, pDoc);
                 if (jobId <= 0) return false;
 
-                // Cancel immediately para no dejar trabajos en la cola
-                SetJob(hPrinter, jobId, 0, IntPtr.Zero, 3);
+                // Intentar cancelar el trabajo; si falla, forzar eliminación
+                if (!SetJob(hPrinter, jobId, 0, IntPtr.Zero, JOB_CONTROL_CANCEL))
+                    SetJob(hPrinter, jobId, 0, IntPtr.Zero, JOB_CONTROL_DELETE);
+
                 EndDocPrinter(hPrinter);
                 return true;
             }

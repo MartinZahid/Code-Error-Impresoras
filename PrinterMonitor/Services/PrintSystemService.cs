@@ -10,7 +10,10 @@ internal static class PrintSystemService
         try
         {
             using var ps = new PrintServer();
-            using var queue = ps.GetPrintQueue(printerName);
+            var queue = ps.GetPrintQueue(printerName);
+            if (queue is null)
+                return "PQ: queue=null";
+            using var _ = queue;
             var qs = queue.QueueStatus;
 
             if (qs.HasFlag(PrintQueueStatus.PaperOut))
