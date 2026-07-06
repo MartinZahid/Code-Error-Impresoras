@@ -10,12 +10,9 @@ internal class SpoolerService : IDisposable
     private Thread? _thread;
     private volatile bool _running;
 
-    // Health-check: se limita a 30s entre envios y requiere 2 fallos
-    // consecutivos para marcar error, evitando saturar el spooler
-    // y falsos positivos por fallos transitorios.
-    private static readonly TimeSpan TestJobInterval = TimeSpan.FromSeconds(30);
+    // Health-check: requiere 2 fallos consecutivos para marcar error,
+    // evitando falsos positivos por fallos transitorios.
     private const int TestJobFailThreshold = 2;
-    private DateTime _lastTestJobTime = DateTime.MinValue;
     private int _testJobFailStreak;
 
     public event Action<PrinterState>? StateChanged;
@@ -223,30 +220,20 @@ internal class SpoolerService : IDisposable
                     res.Intervencion = true;
             }
 
-            // 1c. Health-check: enviar trabajo fantasma.
-            // Limitado a TestJobInterval para no saturar el spooler/driver,
-            // y requiere TestJobFailThreshold fallos consecutivos para
+            // 1c. Health-check: enviar trabajo fantasma en cada ciclo.
+            // Requiere TestJobFailThreshold fallos consecutivos para
             // marcar error, evitando falsos positivos transitorios.
             if (!res.Offline)
             {
-                bool due = (DateTime.Now - _lastTestJobTime) >= TestJobInterval;
-                if (due)
+                if (NativeMethods.SubmitTestJob(h))
                 {
-                    _lastTestJobTime = DateTime.Now;
-                    if (NativeMethods.SubmitTestJob(h))
-                    {
-                        _testJobFailStreak = 0;
-                        debugParts.Add("test-job:OK");
-                    }
-                    else
-                    {
-                        _testJobFailStreak++;
-                        debugParts.Add($"test-job:FAIL(x{_testJobFailStreak})");
-                    }
+                    _testJobFailStreak = 0;
+                    debugParts.Add("test-job:OK");
                 }
                 else
                 {
-                    debugParts.Add("test-job:skip(throttled)");
+                    _testJobFailStreak++;
+                    debugParts.Add($"test-job:FAIL(x{_testJobFailStreak})");
                 }
 
                 if (_testJobFailStreak >= TestJobFailThreshold)
