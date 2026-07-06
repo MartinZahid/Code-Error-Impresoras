@@ -10,6 +10,14 @@ internal class SpoolerService : IDisposable
     private Thread? _thread;
     private volatile bool _running;
 
+    // Health-check: se limita a 30s entre envios y requiere 2 fallos
+    // consecutivos para marcar error, evitando saturar el spooler
+    // y falsos positivos por fallos transitorios.
+    private static readonly TimeSpan TestJobInterval = TimeSpan.FromSeconds(30);
+    private const int TestJobFailThreshold = 2;
+    private DateTime _lastTestJobTime = DateTime.MinValue;
+    private int _testJobFailStreak;
+
     public event Action<PrinterState>? StateChanged;
 
     public List<string> ListPrinters() => NativeMethods.EnumPrinters();
@@ -153,7 +161,7 @@ internal class SpoolerService : IDisposable
         return false;
     }
 
-    private static PrinterState ReadState(string printerName)
+    private PrinterState ReadState(string printerName)
     {
         var res = new PrinterState();
         var debugParts = new List<string>();
@@ -215,19 +223,36 @@ internal class SpoolerService : IDisposable
                     res.Intervencion = true;
             }
 
-            // 1c. Health-check: enviar trabajo fantasma
+            // 1c. Health-check: enviar trabajo fantasma.
+            // Limitado a TestJobInterval para no saturar el spooler/driver,
+            // y requiere TestJobFailThreshold fallos consecutivos para
+            // marcar error, evitando falsos positivos transitorios.
             if (!res.Offline)
             {
-                bool ok = NativeMethods.SubmitTestJob(h);
-                if (!ok)
+                bool due = (DateTime.Now - _lastTestJobTime) >= TestJobInterval;
+                if (due)
                 {
-                    res.Intervencion = true;
-                    res.Error = true;
-                    debugParts.Add("test-job:FAIL");
+                    _lastTestJobTime = DateTime.Now;
+                    if (NativeMethods.SubmitTestJob(h))
+                    {
+                        _testJobFailStreak = 0;
+                        debugParts.Add("test-job:OK");
+                    }
+                    else
+                    {
+                        _testJobFailStreak++;
+                        debugParts.Add($"test-job:FAIL(x{_testJobFailStreak})");
+                    }
                 }
                 else
                 {
-                    debugParts.Add("test-job:OK");
+                    debugParts.Add("test-job:skip(throttled)");
+                }
+
+                if (_testJobFailStreak >= TestJobFailThreshold)
+                {
+                    res.Intervencion = true;
+                    res.Error = true;
                 }
             }
             else
@@ -282,9 +307,12 @@ internal class SpoolerService : IDisposable
                 }
 
                 usbFound = true;
-                bool paperEmpty = (usbStatus.Value & 0x01) != 0;
-                bool selected = (usbStatus.Value & 0x02) != 0;
-                bool noError = (usbStatus.Value & 0x04) != 0;
+                // Bits segun estandar USB Printer Class 1.1 (Port Status byte):
+                // bit 3 (0x08) = Not-Error, bit 4 (0x10) = Selected/Online,
+                // bit 5 (0x20) = Paper Empty
+                bool noError = (usbStatus.Value & 0x08) != 0;
+                bool selected = (usbStatus.Value & 0x10) != 0;
+                bool paperEmpty = (usbStatus.Value & 0x20) != 0;
                 debugParts.Add($"USB: 0x{usbStatus.Value:X2} paper={(paperEmpty?1:0)} online={(selected?1:0)} ok={(noError?1:0)}");
 
                 if (!noError)
